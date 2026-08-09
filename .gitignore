@@ -1,0 +1,10 @@
+_trash
+.vscode
+.logs
+demo_logs
+muninn.verbose.lock
+demo_logs
+dev.bat
+mapConfig.toml
+*.exe
+*.pdb
