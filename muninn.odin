@@ -485,44 +485,52 @@ _init :: proc() {
 		}
 	}
 
-	USER = get_user()
+	// set logged in username
+	when ODIN_OS == .Windows {
+		USER, _ = get_env_string("USERNAME")
+	} else {
+		USER, _ = get_env_string("USER")
+	}
 
 	// default log location
 	if CFG_SAVE_FILE {
-		dir, err := os.get_executable_directory(context.temp_allocator)
-		if err == nil {
-			ld, _ := filepath.join({dir, ".logs"}, context.temp_allocator)
-			CFG_LOG_DIR = strings.clone(ld)
-
-			prog := get_program()
-			if i := strings.index_byte(prog, '.'); i >= 0 {
-				prog = prog[:i]
-			}
-			PROG_NAME = strings.clone(prog)
-
-			ts_buf: [64]u8
-			fn := fmt.tprintf("%s__%s.jsonl", PROG_NAME, timestamp(ts_buf[:], true))
-			lp, _ := filepath.join({CFG_LOG_DIR, fn}, context.temp_allocator)
-			LOG_PATH = strings.clone(lp)
-			os.make_directory_all(CFG_LOG_DIR)
-		} else {
-			fmt.println("Unable to set log directory, please manually set path with init()")
+		f, err := os.get_executable_path(context.allocator)
+		if err != nil {
+			PROG_NAME = "Unknown"
 		}
+		defer delete(f)
+
+		dir, name := filepath.split(f)
+		if i := strings.last_index_byte(name, '.'); i >= 0 {
+			name = name[:i]
+		}
+		ld, _ := filepath.join({dir, ".logs"})
+		if CFG_LOG_DIR != "" do delete(CFG_LOG_DIR)
+		CFG_LOG_DIR = strings.clone(ld)
+
+		if PROG_NAME != "" do delete(PROG_NAME)
+		PROG_NAME = strings.clone(name)
+
+		ts_buf: [64]u8
+		fn := fmt.tprintf("%s__%s.jsonl", PROG_NAME, timestamp(ts_buf[:], true))
+		lp, _ := filepath.join({CFG_LOG_DIR, fn})
+		LOG_PATH = strings.clone(lp)
+		os.make_directory_all(CFG_LOG_DIR)
+	} else {
+		fmt.println("Unable to set log directory, please manually set path with init()")
 	}
 
 	// color use
-	_, no_color := os.lookup_env("NO_COLOR", context.temp_allocator)
-	_, force_color := os.lookup_env("FORCE_COLOR", context.temp_allocator)
-	_, force_no_color := os.lookup_env("FORCE_NO_COLOR", context.temp_allocator)
-	CFG_USE_COLOR = !force_no_color && !no_color || force_color
+	no_color := env_is_set("NO_COLOR")
+	force_color := env_is_set("FORCE_COLOR")
+	force_no_color := env_is_set("FORCE_NO_COLOR")
+	CFG_USE_COLOR = (!force_no_color && !no_color) || force_color
 
 	if os.exists("muninn.verbose.lock") {
-		// hard set verbosity
 		set_log_level(.TRACE)
 		VERBOSE = true
 	} else {
-		// soft set verbosity
-		if v, ok := os.lookup_env("LOG_LEVEL", context.temp_allocator); ok {
+		if v, ok := get_env_string("LOG_LEVEL"); ok && len(v) > 0 {
 			set_level(v)
 		}
 	}
@@ -533,6 +541,7 @@ _init :: proc() {
 		if VERBOSE do fmt.printfln("> trace init set? %v", ok)
 	}
 }
+
 
 /***************************************************************************************************
  * [ Exit ]
@@ -560,14 +569,15 @@ cleanup :: proc() {
 	if !CFG_SAVE_FILE || CFG_LOG_DIR == "" do return
 
 	prefix := fmt.tprintf("%s__", PROG_NAME)
-	safe := make([dynamic]string, 0, CFG_ROTATE_DAYS + 1, context.temp_allocator)
+	safe := make([dynamic]string, 0, CFG_ROTATE_DAYS + 1)
 	for i in 0 ..< CFG_ROTATE_DAYS {
 		ts_buf: [64]u8
 		append(&safe, fmt.tprintf("%s%s.jsonl", prefix, timestamp(ts_buf[:], true, i)))
 	}
 
-	files, err := os.read_directory_by_path(CFG_LOG_DIR, -1, context.temp_allocator)
+	files, err := os.read_directory_by_path(CFG_LOG_DIR, -1, context.allocator)
 	if err != nil do return
+	defer delete(files)
 
 	for f in files {
 		if f.type == .Directory do continue
@@ -752,7 +762,7 @@ group_push_locked :: proc(tid: int, line: string) {
 	}
 
 	// stack traces arrive with embedded newlines - one row each or the box tears
-	for seg in strings.split(strings.trim_right(line, "\n"), "\n", context.temp_allocator) {
+	for seg in strings.split(strings.trim_right(line, "\n"), "\n") {
 		append(&bucket, strings.clone(seg, GROUP_ALLOC))
 		GROUP_COUNT += 1
 	}
@@ -810,7 +820,7 @@ group_box_locked :: proc(tid: int, lines: []string) {
 	tw := get_term_width()
 	if tw <= 0 do tw = 120
 
-	widths := make([dynamic]int, 0, len(lines), context.temp_allocator)
+	widths := make([dynamic]int, 0, len(lines))
 	max_len := 0
 	for s in lines {
 		w := ansi_width(s)
@@ -826,10 +836,10 @@ group_box_locked :: proc(tid: int, lines: []string) {
 		return fmt.tprintf("%s%s%s", BLUE, s, RESET) if CFG_USE_COLOR else s
 	}
 
-	sb := strings.builder_make(context.temp_allocator)
+	sb := strings.builder_make()
 
 	// top: label cut into the frame
-	fill := strings.repeat("═", inner - 1 - len(label), context.temp_allocator)
+	fill := strings.repeat("═", inner - 1 - len(label))
 	fmt.sbprintf(&sb, "%s\n", bc(fmt.tprintf("╔═%s%s╗", label, fill)))
 
 	// body
@@ -839,16 +849,12 @@ group_box_locked :: proc(tid: int, lines: []string) {
 			body = ansi_truncate(s, inner - 1)
 			vis = inner - 1
 		}
-		gap := strings.repeat(" ", inner - 1 - vis, context.temp_allocator)
+		gap := strings.repeat(" ", inner - 1 - vis)
 		fmt.sbprintf(&sb, "%s %s%s%s\n", bc("║"), body, gap, bc("║"))
 	}
 
 	// bottom
-	fmt.sbprintf(
-		&sb,
-		"%s\n",
-		bc(fmt.tprintf("╚%s╝", strings.repeat("═", inner, context.temp_allocator))),
-	)
+	fmt.sbprintf(&sb, "%s\n", bc(fmt.tprintf("╚%s╝", strings.repeat("═", inner))))
 
 	console_write(strings.to_string(sb))
 }
@@ -1040,7 +1046,7 @@ get_trace :: proc() -> (string, []string) {
 	when !ODIN_DEBUG do return "", nil
 	if !CFG_SHOW_STACK do return "", nil
 
-	vec := make([dynamic]string, 0, 16, context.temp_allocator)
+	vec := make([dynamic]string, 0, 16)
 	buf: [64]trace.Frame
 	frames := trace.frames(&TRACE_CTX, 3, buf[:])
 
@@ -1050,9 +1056,10 @@ get_trace :: proc() -> (string, []string) {
 		depth: int,
 		clr:   string,
 	}
-	rows := make([dynamic]Row, 0, 16, context.temp_allocator)
+	rows := make([dynamic]Row, 0, 16)
 
 	is_src := true
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 	for f in frames {
 		fl := trace.resolve(&TRACE_CTX, f, context.temp_allocator)
 		if fl.loc.file_path == "" do continue
@@ -1071,9 +1078,9 @@ get_trace :: proc() -> (string, []string) {
 		append(&vec, fmt.tprintf("%s:%d > %s", fl.loc.file_path, fl.loc.line, fl.loc.procedure))
 	}
 
-  // collapse the middle of both so were not blowing anything out
+	// collapse the middle of both so were not blowing anything out
 	if len(vec) > TRACE_MAX {
-		trimmed := make([dynamic]string, 0, TRACE_MAX + 1, context.temp_allocator)
+		trimmed := make([dynamic]string, 0, TRACE_MAX + 1)
 		append(&trimmed, ..vec[:TRACE_HEAD])
 		append(&trimmed, TRUNC_MARK)
 		append(&trimmed, ..vec[len(vec) - TRACE_TAIL:])
@@ -1085,7 +1092,7 @@ get_trace :: proc() -> (string, []string) {
 
 	shown := rows
 	if len(rows) > TRACE_MAX {
-		shown = make([dynamic]Row, 0, TRACE_MAX + 1, context.temp_allocator)
+		shown = make([dynamic]Row, 0, TRACE_MAX + 1)
 		append(&shown, ..rows[:TRACE_HEAD])
 		append(&shown, Row{rest = TRUNC_MARK, clr = YELLOW})
 		append(&shown, ..rows[len(rows) - TRACE_TAIL:])
@@ -1109,51 +1116,43 @@ get_trace :: proc() -> (string, []string) {
 	}
 
 	// width has to be measured on the final indents, post-splice
-	texts := make([dynamic]string, 0, len(shown), context.temp_allocator)
+	texts := make([dynamic]string, 0, len(shown))
 	max_len := 0
 	for r in shown {
-		pad := strings.repeat(" ", r.depth * 2, context.temp_allocator)
+		pad := strings.repeat(" ", r.depth * 2)
 		t := fmt.tprintf("%s%s%s", pad, r.arm, r.rest)
 		append(&texts, t)
 		if len(t) > max_len do max_len = len(t)
 	}
 
 	inner := max_len + 2
-	sb := strings.builder_make(context.temp_allocator)
+	sb := strings.builder_make()
 
 	c :: proc(s: string) -> string {
 		return fmt.tprintf("%s%s%s", RED, s, RESET) if CFG_USE_COLOR else s
 	}
 
 	// top
-	fmt.sbprintf(
-		&sb,
-		"\n%s",
-		c(fmt.tprintf("╔%s╗", strings.repeat("═", inner, context.temp_allocator))),
-	)
+	fmt.sbprintf(&sb, "\n%s", c(fmt.tprintf("╔%s╗", strings.repeat("═", inner))))
 
 	// body
 	for r, i in shown {
 		plain := texts[i]
 		body := plain
 		if CFG_USE_COLOR {
-			pad := strings.repeat(" ", r.depth * 2, context.temp_allocator)
+			pad := strings.repeat(" ", r.depth * 2)
 			if r.arm == "" {
 				body = fmt.tprintf("%s%s%s%s", pad, r.clr, r.rest, RESET)
 			} else {
 				body = fmt.tprintf("%s%s%s%s%s", pad, r.clr, r.arm, RESET, r.rest)
 			}
 		}
-		gap := strings.repeat(" ", max(0, inner - 1 - len(plain)), context.temp_allocator)
+		gap := strings.repeat(" ", max(0, inner - 1 - len(plain)))
 		fmt.sbprintf(&sb, "\n%s %s%s%s", c("║"), body, gap, c("║"))
 	}
 
 	// bottom
-	fmt.sbprintf(
-		&sb,
-		"\n%s",
-		c(fmt.tprintf("╚%s╝", strings.repeat("═", inner, context.temp_allocator))),
-	)
+	fmt.sbprintf(&sb, "\n%s", c(fmt.tprintf("╚%s╝", strings.repeat("═", inner))))
 
 	return strings.to_string(sb), vec[:]
 }
@@ -1194,7 +1193,7 @@ ansi_width :: proc(s: string) -> int {
 // clip to max_vis visible runes, passing escapes through untouched
 @(private)
 ansi_truncate :: proc(s: string, max_vis: int) -> string {
-	b := strings.builder_make(context.temp_allocator)
+	b := strings.builder_make()
 	n, i := 0, 0
 	for i < len(s) {
 		if s[i] == 0x1b {
@@ -1224,7 +1223,7 @@ ansi_truncate :: proc(s: string, max_vis: int) -> string {
 set_level :: proc(value: any) {
 	switch v in value {
 	case string:
-		up := strings.to_upper(strings.trim_space(v), context.temp_allocator)
+		up := strings.to_upper(strings.trim_space(v))
 		switch up {
 		case "TRACE":
 			set_log_level(.TRACE)
@@ -1265,15 +1264,6 @@ set_level :: proc(value: any) {
 }
 
 @(private)
-get_user :: proc(allocator := context.allocator) -> string {
-	when ODIN_OS == .Windows {
-		return os.get_env("USERNAME", allocator)
-	} else {
-		return os.get_env("USER", allocator)
-	}
-}
-
-@(private)
 timestamp :: proc(buf: []u8, is_for_file: bool = false, offset: int = 0) -> string {
 	t := libc.time(nil)
 	if offset > 0 && is_for_file {
@@ -1292,16 +1282,6 @@ timestamp :: proc(buf: []u8, is_for_file: bool = false, offset: int = 0) -> stri
 	}
 
 	return string(buf[:n])
-}
-
-@(private)
-get_program :: proc() -> string {
-	f, err := os.get_executable_path(context.temp_allocator)
-	if err != nil {
-		return "Unknown"
-	}
-	_, f = filepath.split(f)
-	return f
 }
 
 @(private)
@@ -1346,7 +1326,7 @@ validate_requirements :: proc() {
 @(private)
 repeat :: proc(char: string, i: int = 0) -> string {
 	i := i if i > 0 else get_term_width()
-	return strings.repeat(char, i, context.temp_allocator)
+	return strings.repeat(char, i)
 }
 
 /***************************************************************************************************
@@ -1356,30 +1336,15 @@ repeat :: proc(char: string, i: int = 0) -> string {
 // caller must hold LOG_MUTEX
 // swaps the log directory and derives a fresh PROG__DATE.jsonl path from it
 @(private)
-rebuild_log_path_locked :: proc(dir: string) {
-	if dir == "" do return
-
-	if PROG_NAME == "" {
-		prog := get_program()
-		if i := strings.index_byte(prog, '.'); i >= 0 do prog = prog[:i]
-		PROG_NAME = strings.clone(prog)
-	}
-
-	nd := strings.clone(dir)
-	os.make_directory_all(nd)
-
-	ts_buf: [64]u8
-	fn := fmt.tprintf("%s__%s.jsonl", PROG_NAME, timestamp(ts_buf[:], true))
-	lp, err := filepath.join({nd, fn}, context.temp_allocator)
-	if err != nil {
-		delete(nd)
-		return
-	}
+rebuild_log_path_locked :: proc(fpath: string) {
+	dir, name := filepath.split(fpath)
+	os.make_directory_all(dir)
 
 	if CFG_LOG_DIR != "" do delete(CFG_LOG_DIR)
 	if LOG_PATH != "" do delete(LOG_PATH)
-	CFG_LOG_DIR = nd
-	LOG_PATH = strings.clone(lp)
+
+	CFG_LOG_DIR = dir
+	LOG_PATH = strings.clone(fpath)
 }
 
 // caller must hold LOG_MUTEX
@@ -1493,4 +1458,23 @@ get_term_width :: proc() -> int {
 	} else {
 		return DEFAULT_WIDTH
 	}
+}
+
+@(private)
+// check if var exists return bool for it
+env_is_set :: proc(key: string) -> bool {
+	buf: [64]u8
+	v, err := os.lookup_env(buf[:], key)
+	return err == nil && len(v) > 0
+}
+
+@(private)
+// get a var and return an owned string
+get_env_string :: proc(tgt: string, allocator := context.allocator) -> (string, bool) {
+	v, found := os.lookup_env(tgt, allocator)
+	if !found || len(v) == 0 {
+		delete(v, allocator)
+		return "", false
+	}
+	return v, true
 }
