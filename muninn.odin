@@ -35,7 +35,7 @@ MAGENTA :: "\x1b[38;5;170m" // fatal
 CYAN :: "\x1b[38;5;80m"
 
 /***************************************************************************************************
- * [ Init ]
+ * [ Manual Init ]
 ***************************************************************************************************/
 
 /*
@@ -147,7 +147,7 @@ init :: proc(
 	// ----------------------------------------------------------------  grouping
 	if v, ok := group_max_lines.?; ok do CFG_GROUP_MAX_LINES = max(1, v)
 	if v, ok := group_by_thread.?; ok {
-		if !v && CFG_GROUP_BY_THREAD do flush_now()
+		if !v && CFG_GROUP_BY_THREAD do flush()
 		CFG_GROUP_BY_THREAD = v
 	}
 
@@ -169,6 +169,42 @@ init :: proc(
 			rebuild_log_path_locked(CFG_LOG_DIR)
 		}
 		reopen_file_locked()
+	}
+}
+
+// caller must hold LOG_MUTEX
+// swaps the log directory and derives a fresh PROG__DATE.jsonl path from it
+@(private)
+rebuild_log_path_locked :: proc(fpath: string) {
+	dir, name := filepath.split(fpath)
+	os.make_directory_all(dir)
+
+	if CFG_LOG_DIR != "" do delete(CFG_LOG_DIR)
+	if LOG_PATH != "" do delete(LOG_PATH)
+
+	CFG_LOG_DIR = dir
+	LOG_PATH = strings.clone(fpath)
+}
+
+// caller must hold LOG_MUTEX
+// idempotent: closes whatever's open, reopens only if we should be saving
+@(private)
+reopen_file_locked :: proc() {
+	flush_locked()
+	if EDITING_FILE != nil {
+		os.close(EDITING_FILE)
+		EDITING_FILE = nil
+	}
+	if !CFG_SAVE_FILE || LOG_PATH == "" do return
+
+	ef, err := os.open(LOG_PATH, {.Write, .Create, .Append})
+	if err != nil {
+		fmt.println(err)
+		return
+	}
+	EDITING_FILE = ef
+	if cap(FILE_BUF.buf) == 0 {
+		strings.builder_init(&FILE_BUF, 0, FLUSH_AT + LINE_CAP)
 	}
 }
 
@@ -237,7 +273,7 @@ fatal :: proc(msg: string, args: ..any, ctx_reset := false, location := #caller_
 	if ctx_reset do group_reset()
 	fmt_msg := _fmt(msg, args)
 	central_log("[ FATAL ]", MAGENTA, fmt_msg, location, true)
-	flush_now()
+	flush()
 	panic(fmt_msg)
 }
 
@@ -262,7 +298,7 @@ sep :: proc(
 	nl_pre: bool = false,
 	nl_post: bool = false,
 ) {
-	backing: [1024]u8
+	backing: [4096]u8
 	b := strings.builder_from_bytes(backing[:])
 
 	if nl_pre do strings.write_byte(&b, '\n')
@@ -303,6 +339,120 @@ title :: proc(msg: string, char: string = "*", color: string = BLUE) {
 	sep(char, color)
 }
 
+
+/***************************************************************************************************
+ * [ context.logger bridge ]
+ Routes anything that logs through `context.logger` (core:log, and any third-party lib that uses it)
+ into muninn's pipeline: same formatting, same jsonl sink, same thread grouping, same level gate.
+
+ Auto-attached in @(init). Nothing to call.
+***************************************************************************************************/
+
+/*
+logger returns the muninn logger as a plain runtime.Logger - the exact type of
+`context.logger` (core:log's `log.Logger` is an alias of it). Attach it manually
+if you ever blow away the context yourself, or on a worker thread that started
+from a fresh context:
+
+  ```odin
+  context.logger = mn.logger()
+  ```
+
+Args:
+  - lowest (optional): core:log formats its args BEFORE handing the string over,
+      so this is the only place that cost can be skipped. Defaults to .Debug,
+      which lets everything through and leaves muninn's own atomic level as the
+      single source of truth. Pass a level here only if the format cost of
+      dropped messages actually shows up in a profile.
+*/
+logger :: proc "contextless" (lowest: runtime.Logger_Level = .Debug) -> runtime.Logger {
+	return runtime.Logger {
+		procedure = context_logger_proc,
+		data = nil,
+		lowest_level = lowest,
+		options = {},
+	}
+}
+
+/*
+hooked reports whether a logger is muninn's. pass your own context.logger in -
+muninn's procs read this file's global context, not the caller's, so it can't
+go get it for you:
+
+```odin
+  if !mn.hooked(context.logger) do context.logger = mn.logger()
+```
+*/
+hooked :: proc "contextless" (l: runtime.Logger) -> bool {
+	return l.procedure == context_logger_proc
+}
+
+// only lands if the calling code is also `#+feature global-context`
+@(private)
+@(init)
+_hook_context_logger :: proc() {
+	context.logger = logger()
+}
+
+// reentrancy guard
+@(private, thread_local)
+IN_BRIDGE: bool
+
+@(private)
+context_logger_proc :: proc(
+	data: rawptr, // unused - the logger is stateless
+	level: runtime.Logger_Level,
+	text: string,
+	options: runtime.Logger_Options, // unused - muninn does its own formatting
+	loc := #caller_location,
+) {
+	if IN_BRIDGE do return
+
+	lvl := level_from_runtime(level)
+	if lvl < log_level() do return
+
+	IN_BRIDGE = true
+	defer IN_BRIDGE = false
+
+	tag, clr: string
+	switch lvl {
+	case .TRACE:
+		tag, clr = "[ TRACE ]", GRAY
+	case .DEBUG:
+		tag, clr = "[ DEBUG ]", BLUE
+	case .INFO:
+		tag, clr = "[ INFO  ]", GREEN
+	case .WARN:
+		tag, clr = "[ WARN  ]", YELLOW
+	case .ERROR:
+		tag, clr = "[ ERROR ]", RED
+	case .FATAL:
+		tag, clr = "[ FATAL ]", MAGENTA
+	}
+
+	_log(lvl, tag, clr, text, nil, false, lvl >= .ERROR, loc)
+	if lvl >= .FATAL do flush()
+}
+
+@(private)
+// map log levels
+level_from_runtime :: proc "contextless" (l: runtime.Logger_Level) -> Levels {
+	switch l {
+	case .Debug:
+		return .DEBUG
+	case .Info:
+		return .INFO
+	case .Warning:
+		return .WARN
+	case .Error:
+		return .ERROR
+	case .Fatal:
+		return .FATAL
+	}
+	return .INFO
+}
+
+
 /***************************************************************************************************
  * [ Sanitation ]
 ***************************************************************************************************/
@@ -310,8 +460,12 @@ title :: proc(msg: string, char: string = "*", color: string = BLUE) {
 // flush buffered file output. call before a hard exit / os.exit().
 // @(fini) already does this on a normal return from main.
 flush :: proc() {
-	flush_now()
+	sync.lock(&LOG_MUTEX)
+	group_flush_locked()
+	flush_locked()
+	sync.unlock(&LOG_MUTEX)
 }
+
 
 /***************************************************************************************************
  * [ PRIVATE ]
@@ -470,7 +624,7 @@ console_write :: #force_inline proc(s: string) {
 }
 
 /***************************************************************************************************
- * [ Init ]
+ * [ Auto Init ]
 ***************************************************************************************************/
 @(init)
 @(private)
@@ -544,7 +698,7 @@ _init :: proc() {
 
 
 /***************************************************************************************************
- * [ Exit ]
+ * [ Auto Exit ]
 ***************************************************************************************************/
 @(fini)
 @(private)
@@ -597,14 +751,6 @@ flush_locked :: proc() {
 	strings.builder_reset(&FILE_BUF)
 }
 
-@(private)
-flush_now :: proc() {
-	sync.lock(&LOG_MUTEX)
-	group_flush_locked()
-	flush_locked()
-	sync.unlock(&LOG_MUTEX)
-}
-
 /***************************************************************************************************
  * [ Main logging ]
 ***************************************************************************************************/
@@ -614,6 +760,7 @@ central_log :: proc(
 	loc: runtime.Source_Code_Location,
 	s_trace: bool = false,
 ) {
+	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 	sync.once_do(&INIT_ONCE, validate_requirements)
 
 	// redeclare for thread safety
@@ -1043,6 +1190,7 @@ TRUNC_MARK :: "... [ TRUNCATED SEE LOGS FOR FULL TRACE ] ..."
 // caller must hold TRACE_MUTEX
 @(private)
 get_trace :: proc() -> (string, []string) {
+
 	when !ODIN_DEBUG do return "", nil
 	if !CFG_SHOW_STACK do return "", nil
 
@@ -1059,7 +1207,6 @@ get_trace :: proc() -> (string, []string) {
 	rows := make([dynamic]Row, 0, 16)
 
 	is_src := true
-	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
 	for f in frames {
 		fl := trace.resolve(&TRACE_CTX, f, context.temp_allocator)
 		if fl.loc.file_path == "" do continue
@@ -1329,45 +1476,6 @@ repeat :: proc(char: string, i: int = 0) -> string {
 	return strings.repeat(char, i)
 }
 
-/***************************************************************************************************
- * [ used for manual init ]
-***************************************************************************************************/
-
-// caller must hold LOG_MUTEX
-// swaps the log directory and derives a fresh PROG__DATE.jsonl path from it
-@(private)
-rebuild_log_path_locked :: proc(fpath: string) {
-	dir, name := filepath.split(fpath)
-	os.make_directory_all(dir)
-
-	if CFG_LOG_DIR != "" do delete(CFG_LOG_DIR)
-	if LOG_PATH != "" do delete(LOG_PATH)
-
-	CFG_LOG_DIR = dir
-	LOG_PATH = strings.clone(fpath)
-}
-
-// caller must hold LOG_MUTEX
-// idempotent: closes whatever's open, reopens only if we should be saving
-@(private)
-reopen_file_locked :: proc() {
-	flush_locked()
-	if EDITING_FILE != nil {
-		os.close(EDITING_FILE)
-		EDITING_FILE = nil
-	}
-	if !CFG_SAVE_FILE || LOG_PATH == "" do return
-
-	ef, err := os.open(LOG_PATH, {.Write, .Create, .Append})
-	if err != nil {
-		fmt.println(err)
-		return
-	}
-	EDITING_FILE = ef
-	if cap(FILE_BUF.buf) == 0 {
-		strings.builder_init(&FILE_BUF, 0, FLUSH_AT + LINE_CAP)
-	}
-}
 
 /***************************************************************************************************
  * [ Platform bindings ]
