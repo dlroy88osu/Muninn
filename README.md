@@ -12,19 +12,19 @@
   </a>
 </h1>
 
-[Odin Repo](https://github.com/odin-lang)
-
-Credit where credit is due! This has been a fun language to play in and I am excited to dig deeper! I'm coming from a data engineering background more than anything, and while I have delved into other languages, Python has been home... But this has indeed reminded me of "... the Joy of Programming". Here's to you [@gingerBill](https://github.com/gingerBill) and team! 
+Credit where credit is due. Odin has been a genuine pleasure to build in, and I am only getting started. I come from a data engineering background, and while I have poked at plenty of other languages, Python has been home for years. This is the first one in a long time that reminded me what "... the Joy of Programming" actually feels like. Here's to you [@gingerBill](https://github.com/gingerBill) and team.
 
 ---
-A zero-ceremony logging package for Odin. Pretty, colored console output for humans, JSON Lines on disk for machines, optional per-thread output boxes, stack traces on `error` / `fatal`, and automatic log rotation.
+A zero-ceremony logging package for Odin.
+
+Colored, aligned console output for humans. JSON Lines on disk for machines. Per-thread output boxes for when a worker pool turns your terminal into confetti. Stack traces on `error` and `fatal`. Log rotation that cleans up after itself. And a one-line bridge to `context.logger`, so a vendored package's output lands in the same place as your own.
 
 > Everything documented here is the **public API**.
 
 <img src="assets/muninn-default-output.png" align="left" width="800" alt="Default console output showing a timestamp block, runtime block, colored level tag, the message, and a gray file:line ( procedure ) suffix with process and thread ids" />
 <br clear="left" />
 
-> This is "out of the box"! Everything just works... `import mn "lib/muninn"` and thats it! (assuming you put it in lib)
+> This is "out of the box". No setup call, no config file, nothing to wire up: `import mn "lib/muninn"` and start logging. Every option ships with a sane default, and `init` is there for the ones you disagree with.
 
 ## Contents
 
@@ -40,6 +40,13 @@ A zero-ceremony logging package for Odin. Pretty, colored console output for hum
   - [Logging procedures](#logging-procedures)
     - [Level filtering](#level-filtering)
     - [`error` and `fatal` behavior](#error-and-fatal-behavior)
+  - [`core:log` bridge](#corelog-bridge)
+    - [`logger`](#logger)
+    - [`hooked`](#hooked)
+    - [Attach at the top level of a scope](#attach-at-the-top-level-of-a-scope)
+    - [Threads](#threads)
+    - [Level mapping](#level-mapping)
+    - [Bridge notes](#bridge-notes)
   - [`is_enabled`](#is_enabled)
   - [`reset_ctx`](#reset_ctx)
   - [`flush`](#flush)
@@ -108,6 +115,8 @@ main :: proc() {
 | --- | --- | --- |
 | `init` | proc | Configure the logger. Every argument is optional. |
 | `trace` `debug` `info` `warn` `warning` `error` `fatal` | proc | Emit a log line. |
+| `logger` | proc | Muninn packaged as a `runtime.Logger`, for `context.logger`. |
+| `hooked` | proc | Whether a given logger is muninn's. |
 | `is_enabled` | proc | Cheap check before building expensive log arguments. |
 | `reset_ctx` | proc | Close the calling thread's pending output box. |
 | `flush` | proc | Force buffered file output to disk. |
@@ -266,6 +275,118 @@ Stack traces require a debug build. Without `-debug` the trace is empty and the 
 
 <img src="assets/muninn-fatal.png" align="left" width="800" alt="A magenta FATAL line with its stack trace box, immediately followed by the Odin runtime panic output" />
 <br clear="left" />
+
+## `core:log` bridge
+
+Third-party packages log through `context.logger`. Point that at muninn and everything they emit joins your own lines: same colors, same `file:line ( procedure )` suffix, same level gate, same `.jsonl`, same thread boxes.
+
+One line, at the top level of `main`:
+
+```odin
+context.logger = mn.logger()
+```
+
+```odin
+package main
+
+import "core:log"
+import mn "libs/muninn"
+
+main :: proc() {
+	context.logger = mn.logger()
+
+	log.info("a vendored package logging through core:log")
+	mn.info("your own call")
+	// identical output, identical file, identical everything
+}
+```
+
+<img src="assets/bridge_example.png" align="left" width="800" alt="Console output where core:log calls and muninn calls are indistinguishable: the same timestamp and runtime blocks, colored level tags, messages, and gray file:line ( procedure ) suffixes pointing at the caller rather than at muninn" />
+<br clear="left" />
+
+Muninn does attempt to attach itself in its own `@(init)`, but a procedure cannot write another scope's `context` unless your code also opts into `#+feature global-context`. Treat the one-liner as required and use `hooked` if you want to know which happened.
+
+### `logger`
+
+```odin
+logger :: proc "contextless" (lowest: runtime.Logger_Level = .Debug) -> runtime.Logger
+```
+
+Returns muninn as a plain `runtime.Logger`, which is the exact type of `context.logger`. `core:log`'s `log.Logger` is an alias of it, so this drops into anywhere a logger is expected.
+
+`lowest` is `core:log`'s own cutoff, tested before it formats the message. It defaults to `.Debug` so everything reaches muninn and the `level` you set with `init` stays the single source of truth. Raise it only if the formatting cost of dropped messages shows up in a profile, and remember it is a snapshot: a later `init(level = ...)` will not move it.
+
+### `hooked`
+
+```odin
+hooked :: proc "contextless" (l: runtime.Logger) -> bool
+```
+
+Reports whether a logger is muninn's. Hand it your own `context.logger`, since muninn's procedures read muninn's context, not yours.
+
+```odin
+fmt.println("bridged?", mn.hooked(context.logger))
+```
+
+Do not test for `nil` instead. The stock logger's `procedure` field is a live pointer to a no-op, so `context.logger.procedure == nil` is `false` even while everything is being silently swallowed.
+
+### Attach at the top level of a scope
+
+`context` is **block** scoped, not procedure scoped. An assignment inside an `if`, `for`, `do`, or a bare `{}` is discarded at the closing brace:
+
+```odin
+// WRONG - evaporates at the closing brace, core:log stays silent
+if !mn.hooked(context.logger) {
+	context.logger = mn.logger()
+}
+
+// RIGHT - top level of the scope you want it in
+context.logger = mn.logger()
+```
+
+Same reason there is no `unhook` procedure: a procedure physically cannot write its caller's context. Detach in your own scope instead.
+
+```odin
+context.logger = {}
+```
+
+### Threads
+
+A thread that starts from a fresh context gets the stock no-op logger. Attach at the top of the thread procedure, unconditionally:
+
+```odin
+worker :: proc(t: ^thread.Thread) {
+	context.logger = mn.logger()
+
+	log.infof("worker %d up", t.user_index)
+}
+```
+
+Bridged lines group into per-thread boxes exactly like `mn.*` calls do.
+
+### Level mapping
+
+`core:log` has five levels, muninn has six. `TRACE` has no equivalent, so `.Debug` is the floor from the `core:log` side. `mn.trace` still reaches it from yours.
+
+| `core:log` | muninn | Extra |
+| --- | --- | --- |
+| `.Debug` | `DEBUG` | |
+| `.Info` | `INFO` | |
+| `.Warning` | `WARN` | |
+| `.Error` | `ERROR` | stack trace, immediate file flush |
+| `.Fatal` | `FATAL` | stack trace, immediate file flush |
+
+`log.fatal` does **not** abort, and neither does the bridge. It logs, flushes, and returns. That matches `core:log`, where only `log.panic` ends the process. `mn.fatal` still panics.
+
+### Bridge notes
+
+Messages arrive already formatted from `core:log`, so they are never run through `fmt` a second time. A stray `%` in a vendored log message is safe.
+
+The bridge reuses the same path as `mn.*`, so `is_enabled`, `reset_ctx`, `flush`, `emit_json` and grouping all behave identically. It is stateless: `logger()` returns a value, holds no allocation, and is safe to call as often as you like.
+
+A reentrancy guard sits at the front of it. If anything underneath the logger logs again through `context.logger`, a tracking allocator being the usual culprit, the inner call is dropped rather than recursing into the mutex.
+
+Stack traces skip a fixed number of frames, tuned for a direct `mn.error` call. A bridged trace runs two frames deeper, so its first entry is `core:log`'s plumbing rather than the original call site. The `file:line ( procedure )` on the log line itself is always the real caller.
 
 ## `is_enabled`
 
@@ -526,14 +647,14 @@ Console and file writes are serialized behind a single mutex, so lines from diff
 
 ## Limits and gotchas
 
-The separator used by `sep` and `title` is built in a 1 KiB stack buffer, so an unusually wide terminal clips the line.
-
 `emit_json` overrides everything cosmetic. Colors, location suffixes, boxes and grouping are all skipped when it is on.
 
 `group_by_thread` defers output. If your program hangs, the last few lines of the thread that hung may still be sitting in a buffer. Lower `group_max_lines`, call `reset_ctx` at job boundaries, or turn grouping off while you are hunting a deadlock.
 
-Only `level` is safe to reconfigure at runtime. Everything else needs to be set before threads exist.
+Only `level` is safe to reconfigure during a threaded routine. Everything else needs to be set before threads exist.
 
 Stack traces need `-debug`. In release builds `error` and `fatal` still log and still flush, but the trace is empty.
 
 Wrapping the logging procs in your own helper without forwarding `location` will point every line at your wrapper. Pass `location = #caller_location` through.
+
+`context` is block scoped. `context.logger = mn.logger()` inside an `if`, `for` or `do` is thrown away at the closing brace, and `core:log` goes quiet with no error. Attach at the top level of the scope you want it in.
