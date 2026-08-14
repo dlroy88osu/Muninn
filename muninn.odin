@@ -16,6 +16,7 @@ import "core:sync"
 import "core:time"
 
 
+// Muninn-v2026.08.004
 /***************************************************************************************************
  * [ STATIC ]
 ***************************************************************************************************/
@@ -325,6 +326,17 @@ flush_locked :: proc() {
 	strings.builder_reset(&ST.file_buf)
 }
 
+/***************************************************************************************************
+ * [ User Exit with code ]
+***************************************************************************************************/
+
+// simple exit routine - just pass the error code
+exit :: proc(code: int = 0) {
+  info("Exiting program with code: %d", code)
+  flush()
+  os.exit(code)
+}
+
 
 /***************************************************************************************************
  * [ Manual Init ]
@@ -626,7 +638,7 @@ Args:
   ```
 */
 sep :: proc(
-	char: string = "*",
+	char: string = "─",
 	color: string = BLUE,
 	nl_pre: bool = false,
 	nl_post: bool = false,
@@ -671,7 +683,7 @@ Args:
   mr.title(msg="Some Title", char="-", color="\x1b[38;5;77m")
   ```
 */
-title :: proc(msg: string, char: string = "*", color: string = BLUE) {
+title :: proc(msg: string, char: string = "═", color: string = BLUE) {
 	sep(char, color, nl_pre = true)
 	m := fmt.tprintf("%s* [ %s ]%s", color, msg, RESET) if CFG.use_color else msg
 	fmt.println(m)

@@ -1,12 +1,12 @@
-<h1 align="center"><img src="assets/Muninn.svg" alt="Muninn" width="1200" />
+<h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="1200" /></a>
 
-<img src="https://img.shields.io/badge/Muninn-v2026.08.003-blue" height="40">
+<img src="https://img.shields.io/badge/Muninn-v2026.08.004-blue" height="40">
 <img src="https://img.shields.io/badge/Odin-dev--2026--08-blue" height="40">
 
 </h1>
 
 # Quick shout out to...
-<h4 align="left"><a href="https://odin-lang.org/"><img src="https://odin-lang.org/logo.svg" alt="Muninn" width="200" /></a>
+<h4 align="left"><a href="https://odin-lang.org/"><img src="https://odin-lang.org/logo.svg" alt="Odin" width="200" /></a>
  &nbsp;has been a genuine pleasure to build in, and I am only getting started. I come from a data engineering background, and while I have poked at plenty of other languages, Python has been home for years. This is the first one in a long time that reminded me what "... the Joy of Programming" actually feels like. Here's to you [@gingerBill](https://github.com/gingerBill) and team.
 </h4>
 
@@ -57,6 +57,7 @@ Again `-debug` matters: without it `get_trace()` early-returns and the stack-tra
   - [Logging procedures](#logging-procedures)
     - [Level filtering](#level-filtering)
     - [`error` and `fatal` behavior](#error-and-fatal-behavior)
+  - [Exit procedure](#exit-procedure)
   - [`core:log` bridge](#corelog-bridge)
     - [`logger`](#logger)
     - [`hooked`](#hooked)
@@ -84,6 +85,7 @@ Again `-debug` matters: without it `get_trace()` early-returns and the stack-tra
   - [Tuning constants](#tuning-constants)
   - [Internal procedures](#internal-procedures)
   - [Demo Run](#demo-run)
+  - [Built with:](#built-with)
 
 ---
 
@@ -144,8 +146,7 @@ main :: proc() {
     mn.sep(char = "-", color = mn.GRAY)
 
     // only if you bail out without returning from main:
-    // mn.flush()
-    // os.exit(1)
+    // mn.exit(1)
 }
 ```
 
@@ -158,6 +159,7 @@ main :: proc() {
 | Symbol | Kind | Purpose |
 | --- | --- | --- |
 | `init` | proc | Configure the logger. Every argument is optional. |
+| `exit` | proc | Exit the program with flush built in. |
 | `trace` `debug` `info` `warn` `warning` `error` `fatal` | proc | Emit a log line. |
 | `logger` | proc | Muninn packaged as a `runtime.Logger`, for `context.logger`. |
 | `hooked` | proc | Whether a given logger is muninn's. |
@@ -326,6 +328,20 @@ A call is dropped when its level is below the configured minimum, before the mes
 `fatal` does the same, then flushes everything — including all pending thread windows — and **panics** with the formatted message. It does not return.
 
 Stack traces require `-debug`. Without it the trace is empty and the box is not drawn. In the console box the trace is capped at five head frames and five tail frames with a truncation marker in the middle. The `stack` array in the JSON is never truncated.
+
+## Exit procedure
+
+The exit procedure is a simple helper but so you don't have to remember to manually flush
+
+```odin
+// these are the same
+mn.exit()
+mn.exit(0)
+
+// this error code returns
+mn.exit(1)
+
+```
 
 ## `core:log` bridge
 
@@ -830,3 +846,9 @@ All `@(private)`. Listed here for orientation when reading the source.
 ## Demo Run
 <img src="assets/demo.svg" align="left" width="1500" alt="Demo run" />
 <br clear="left" />>
+
+---
+
+## Built with:
+
+<h1 align="center"><a href="https://odin-lang.org/"><img src="https://odin-lang.org/logo.svg" alt="Odin" width="400" /></a>
