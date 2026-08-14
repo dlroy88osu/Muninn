@@ -332,6 +332,12 @@ flush_locked :: proc() {
 
 // simple exit routine - just pass the error code
 exit :: proc(code: int = 0) {
+  color := GREEN
+  if code > 0 {
+    color = RED
+  }
+
+  sep(color=color, nl_pre=true, char="─")
   info("Exiting program with code: %d", code)
   flush()
   os.exit(code)
