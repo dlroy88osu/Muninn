@@ -126,6 +126,9 @@ outside the package.
 */
 @(private)
 State :: struct {
+  self_loc:     string,
+  rel_loc:      string,
+
 	// process identity
 	user:         string,
 	prog_name:    string,
@@ -159,6 +162,8 @@ State :: struct {
 
 @(private)
 ST := State {
+  self_loc  = #directory,
+  rel_loc   = "",
 	started   = time.now(),
 	proc_id   = os.get_pid(),
 	group_tid = -1,
@@ -855,7 +860,23 @@ central_log :: proc(
 	line, col: int
 	if CFG.show_location {
 		fpath = loc.file_path
-		_, fname = filepath.split(loc.file_path)
+
+    if ST.rel_loc == "" {
+      caller, _ := strings.split_multi(fpath, {"/", "\\"})
+      defer delete(caller)
+
+      slice.reverse(caller)
+      for p, _ in caller {
+        if !strings.contains(ST.self_loc, p) {
+          continue
+        }
+        ST.rel_loc = p
+        break
+      }
+    }
+
+    post := strings.split(loc.file_path, ST.rel_loc)
+    fname, _ = filepath.join({".", post[len(post) - 1]})
 		line = int(loc.line)
 		col = int(loc.column)
 		func = ""
@@ -973,6 +994,7 @@ central_log :: proc(
 	sync.unlock(&ST.log_mutex)
 }
 
+
 /***************************************************************************************************
  * [ Thread grouping ]
 
@@ -997,16 +1019,16 @@ group_push_locked :: proc(tid: int, line: string) {
 	}
 
 	// stack traces arrive with embedded newlines - one row each or the box tears
-	segs := strings.split(strings.trim_right(line, "\n"), "\n")
-	defer delete(segs)
+	segments := strings.split(strings.trim_right(line, "\n"), "\n")
+	defer delete(segments)
 
 	if CFG.truncate_long_lines {
-		for seg in segs do append(&ST.group_win, strings.clone(seg, ST.alloc))
+		for seg in segments do append(&ST.group_win, strings.clone(seg, ST.alloc))
 	} else {
 		// wrap now, so one wrapped row is one window row and max_lines still means rows
 		tw := get_term_width()
 		if tw <= 0 do tw = DEFAULT_WIDTH
-		for seg in segs {
+		for seg in segments {
 			for part in ansi_wrap(seg, max(1, tw - 3), ST.alloc) {
 				append(&ST.group_win, part)
 			}
