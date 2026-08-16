@@ -3,6 +3,10 @@
 <img src="https://img.shields.io/badge/Muninn-v2026.08.004-blue" height="40">
 <img src="https://img.shields.io/badge/Odin-dev--2026--08-blue" height="40">
 
+<a href="https://ko-fi.com/U6U81O60FT" target="_blank" rel="noopener noreferrer">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" height="30" alt="Support me on Ko-fi">
+</a>
+
 </h1>
 
 # Quick shout out to...
