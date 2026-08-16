@@ -1,16 +1,16 @@
-<h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="800" /></a>
-
+<h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="1200" /></a>
+<br>
 <img src="https://img.shields.io/badge/Muninn-v2026.08.004-blue" height="60">
 <img src="https://img.shields.io/badge/Odin-dev--2026--08-blue" height="60">
 <br>
 <a href="https://ko-fi.com/U6U81O60FT" target="_blank" rel="noopener noreferrer">
-    <img src="https://ko-fi.com/img/githubbutton_sm.svg" height="30" alt="Support me on Ko-fi">
+    <img src="https://ko-fi.com/img/githubbutton_sm.svg" height="20" alt="Support me on Ko-fi">
 </a>
 
 </h1>
 
 # Quick shout out to...
-<h4 align="left"><a href="https://odin-lang.org/"><img src="https://odin-lang.org/logo.svg" alt="Odin" width="200" /></a>
+<h4 align="left"><a href="https://odin-lang.org/"><img src="https://odin-lang.org/logo.svg" alt="Odin" width="100" /></a>
  &nbsp;has been a genuine pleasure to build in, and I am only getting started. I come from a data engineering background, and while I have poked at plenty of other languages, Python has been home for years. This is the first one in a long time that reminded me what "... the Joy of Programming" actually feels like. Here's to you [@gingerBill](https://github.com/gingerBill) and team.
 </h4>
 
