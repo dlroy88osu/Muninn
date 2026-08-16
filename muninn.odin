@@ -16,7 +16,7 @@ import "core:sync"
 import "core:time"
 
 
-// Muninn-v2026.08.004
+// Muninn-v2026.08.005
 /***************************************************************************************************
  * [ STATIC ]
 ***************************************************************************************************/
@@ -126,8 +126,8 @@ outside the package.
 */
 @(private)
 State :: struct {
-  self_loc:     string,
-  rel_loc:      string,
+	self_loc:     string,
+	rel_loc:      string,
 
 	// process identity
 	user:         string,
@@ -150,9 +150,6 @@ State :: struct {
 	// handing a foreign pointer to the wrong allocator.
 	alloc:        runtime.Allocator,
 
-	// stack traces
-	trace_ctx:    trace.Context,
-
 	// locks
 	log_mutex:    sync.Mutex,
 	time_mutex:   sync.Mutex,
@@ -162,8 +159,8 @@ State :: struct {
 
 @(private)
 ST := State {
-  self_loc  = #directory,
-  rel_loc   = "",
+	self_loc  = #directory,
+	rel_loc   = "",
 	started   = time.now(),
 	proc_id   = os.get_pid(),
 	group_tid = -1,
@@ -266,12 +263,6 @@ _init :: proc() {
 			set_level(v)
 		}
 	}
-
-	// trace if in debug
-	when ODIN_DEBUG {
-		ok := trace.init(&ST.trace_ctx)
-		if CFG.verbose do fmt.printfln("> trace init set? %v", ok)
-	}
 }
 
 
@@ -282,6 +273,7 @@ _init :: proc() {
 @(private)
 cleanup :: proc() {
 	runtime.DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD()
+
 	sync.lock(&ST.log_mutex)
 	group_flush_locked() // dump any pending thread boxes first
 	flush_locked()
@@ -293,10 +285,6 @@ cleanup :: proc() {
 	group_drop_locked()
 	delete(ST.group_win)
 	sync.unlock(&ST.log_mutex)
-
-	when ODIN_DEBUG {
-		trace.destroy(&ST.trace_ctx)
-	}
 
 	// log rotation
 	if !CFG.save_file || CFG.log_dir == "" do return
@@ -337,15 +325,15 @@ flush_locked :: proc() {
 
 // simple exit routine - just pass the error code
 exit :: proc(code: int = 0) {
-  color := GREEN
-  if code > 0 {
-    color = RED
-  }
+	color := GREEN
+	if code > 0 {
+		color = RED
+	}
 
-  sep(color=color, nl_pre=true, char="─")
-  info("Exiting program with code: %d", code)
-  flush()
-  os.exit(code)
+	sep(color = color, nl_pre = true, char = "─")
+	info("Exiting program with code: %d", code)
+	flush()
+	os.exit(code)
 }
 
 
@@ -861,22 +849,22 @@ central_log :: proc(
 	if CFG.show_location {
 		fpath = loc.file_path
 
-    if ST.rel_loc == "" {
-      caller, _ := strings.split_multi(fpath, {"/", "\\"})
-      defer delete(caller)
+		if ST.rel_loc == "" {
+			caller, _ := strings.split_multi(fpath, {"/", "\\"})
+			defer delete(caller)
 
-      slice.reverse(caller)
-      for p, _ in caller {
-        if !strings.contains(ST.self_loc, p) {
-          continue
-        }
-        ST.rel_loc = p
-        break
-      }
-    }
+			slice.reverse(caller)
+			for p, _ in caller {
+				if !strings.contains(ST.self_loc, p) {
+					continue
+				}
+				ST.rel_loc = p
+				break
+			}
+		}
 
-    post := strings.split(loc.file_path, ST.rel_loc)
-    fname, _ = filepath.join({".", post[len(post) - 1]})
+		post := strings.split(loc.file_path, ST.rel_loc)
+		fname, _ = filepath.join({".", post[len(post) - 1]})
 		line = int(loc.line)
 		col = int(loc.column)
 		func = ""
@@ -1325,8 +1313,12 @@ get_trace :: proc() -> (string, []string) {
 	if !CFG.show_stack do return "", nil
 
 	vec := make([dynamic]string, 0, 16, context.temp_allocator)
-	buf: [64]trace.Frame
-	frames := trace.frames(&ST.trace_ctx, 3, buf[:])
+
+	capture := trace.capture(3)
+	locations, err := trace.resolve(capture, context.temp_allocator, context.temp_allocator)
+	if err != nil {
+		return "", nil
+	}
 
 	Row :: struct {
 		arm:   string,
@@ -1337,9 +1329,8 @@ get_trace :: proc() -> (string, []string) {
 	rows := make([dynamic]Row, 0, 16, context.temp_allocator)
 
 	is_src := true
-	for f in frames {
-		fl := trace.resolve(&ST.trace_ctx, f, context.temp_allocator)
-		if fl.loc.file_path == "" do continue
+	for loc in locations {
+		if loc.file_path == "" do continue
 
 		arm := "SRC! > " if is_src else "FROM > "
 		is_src = false
@@ -1348,11 +1339,12 @@ get_trace :: proc() -> (string, []string) {
 			&rows,
 			Row {
 				arm = arm,
-				rest = fmt.tprintf("%s:%d %s", fl.loc.file_path, fl.loc.line, fl.loc.procedure),
+				rest = fmt.tprintf("%s:%d %s", loc.file_path, loc.line, loc.procedure),
 				clr = RED,
 			},
 		)
-		append(&vec, fmt.tprintf("%s:%d > %s", fl.loc.file_path, fl.loc.line, fl.loc.procedure))
+
+		append(&vec, fmt.tprintf("%s:%d > %s", loc.file_path, loc.line, loc.procedure))
 	}
 
 	// collapse the middle of both so were not blowing anything out

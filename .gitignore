@@ -10,3 +10,4 @@ mapConfig.toml
 *.pdb
 TODO.md
 dev
+ols.json

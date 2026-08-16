@@ -1,6 +1,6 @@
 <h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="1200" /></a>
 <br>
-<img src="https://img.shields.io/badge/Muninn-v2026.08.004-blue" height="60">
+<img src="https://img.shields.io/badge/Muninn-v2026.08.005-blue" height="60">
 <img src="https://img.shields.io/badge/Odin-dev--2026--08-blue" height="60">
 <br>
 <a href="https://ko-fi.com/U6U81O60FT" target="_blank" rel="noopener noreferrer">
@@ -106,7 +106,8 @@ Again `-debug` matters: without it `get_trace()` early-returns and the stack-tra
   - `log_dir` path-ownership bug fixed: calling `init(log_dir = ...)` more than once no longer segfaults.
   - `os.file_info_slice_delete` used for rotation cleanup; previously only the slice was freed, leaking every `fullpath` string inside it.
   - `DEFAULT_TEMP_ALLOCATOR_TEMP_GUARD` added to `flush`, `group_reset`, and `cleanup` so temp allocations from those paths are always reclaimed.
-
+- 2026.08.005
+  - Fixed the trace components to work with Odin: `dev-2026-08-nightly:902106f`
 ---
 
 ## Install
