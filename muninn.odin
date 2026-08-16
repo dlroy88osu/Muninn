@@ -16,7 +16,7 @@ import "core:sync"
 import "core:time"
 
 
-// Muninn-v2026.08.005
+// Muninn-v2026.08.004
 /***************************************************************************************************
  * [ STATIC ]
 ***************************************************************************************************/
@@ -571,8 +571,14 @@ is_enabled :: #force_inline proc "contextless" (lvl: Levels) -> bool {
 
 // inlined formatting
 @(private)
-_fmt :: #force_inline proc(msg: string, args: []any) -> string {
-	return msg if len(args) == 0 else fmt.tprintf(msg, ..args)
+_fmt :: #force_inline proc(msg: string, args: []any, allocator := context.allocator) -> string {
+	if len(args) == 0 {
+		s, err := strings.clone(msg, allocator)
+		assert(err == nil)
+		return s
+	}
+
+	return fmt.aprintf(msg, ..args, allocator = allocator)
 }
 
 // inlined into each wrapper below for consistency
@@ -584,9 +590,14 @@ _log :: #force_inline proc(
 	ctx_reset, s_trace: bool,
 	loc: runtime.Source_Code_Location,
 ) {
-	if ctx_reset do group_reset()
 	if lvl < log_level() do return
-	central_log(tag, clr, _fmt(msg, args), loc, s_trace)
+
+	fmt_msg := _fmt(msg, args, context.allocator)
+	defer delete(fmt_msg)
+
+	if ctx_reset do group_reset()
+
+	central_log(tag, clr, fmt_msg, loc, s_trace)
 }
 
 // alias, these for QOL
