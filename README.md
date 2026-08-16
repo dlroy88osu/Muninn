@@ -1,4 +1,4 @@
-<h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="1200" /></a>
+<h1 align="center"><a href="https://github.com/dlroy88osu/Muninn"><img src="assets/Muninn.svg" alt="Muninn" width="800" /></a>
 
 <img src="https://img.shields.io/badge/Muninn-v2026.08.004-blue" height="60">
 <img src="https://img.shields.io/badge/Odin-dev--2026--08-blue" height="60">
